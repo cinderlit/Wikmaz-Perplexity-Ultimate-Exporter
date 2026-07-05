@@ -3,48 +3,84 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    body { width: 310px; font-family: 'Segoe UI', Tahoma, sans-serif; padding: 15px; background: #121212; color: #ffffff; margin: 0; }
-    h3 { margin-top: 0; text-align: center; font-size: 18px; color: #2dd4bf; margin-bottom: 5px; }
-	p { font-size: 12px; text-align: center; color: #a1a1aa; margin-bottom: 15px; }
-    button { width: 100%; padding: 12px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; margin-bottom: 10px; }
+    body { width: 320px; font-family: 'Segoe UI', Tahoma, sans-serif; padding: 15px; background: #121212; color: #ffffff; margin: 0; }
+    h3 { margin-top: 0; text-align: center; font-size: 17px; color: #2dd4bf; margin-bottom: 5px; }
+    p { font-size: 12px; text-align: center; color: #a1a1aa; margin-bottom: 12px; }
+    button { width: 100%; padding: 10px; font-size: 13px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.2s; margin-bottom: 8px; }
+    #exportCurrentBtn { background: #0d9488; color: white; }
+    #exportCurrentBtn:hover { background: #0f766e; }
     #startBtn { background: #6d28d9; color: white; }
     #startBtn:hover { background: #5b21b6; }
+    #incrementalBtn { background: #2563eb; color: white; }
+    #incrementalBtn:hover { background: #1d4ed8; }
     #stopBtn { background: #dc2626; color: white; display: none; }
     #stopBtn:hover { background: #b91c1c; }
-    #status { font-size: 13px; color: #facc15; text-align: center; font-weight: 500; min-height: 20px; margin-bottom: 10px; }
-    progress { width: 100%; height: 10px; border-radius: 5px; display: none; }
+    #status { font-size: 12px; color: #facc15; text-align: center; font-weight: 500; min-height: 20px; margin-bottom: 8px; line-height: 1.4; }
+    progress { width: 100%; height: 10px; border-radius: 5px; display: none; margin-bottom: 8px; }
     progress::-webkit-progress-bar { background-color: #27272a; border-radius: 5px; }
     progress::-webkit-progress-value { background-color: #2dd4bf; border-radius: 5px; }
-    
-    .footer { margin-top: 15px; padding-top: 12px; border-top: 1px solid #27272a; text-align: center; }
-    .support-links { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+    .advanced-toggle { background: #27272a; color: #a1a1aa; font-size: 12px; padding: 8px; }
+    .advanced-toggle:hover { background: #3f3f46; color: #fff; }
+    .advanced-panel { display: none; margin-bottom: 8px; padding: 10px; background: #1a1a1a; border-radius: 6px; border: 1px solid #27272a; }
+    .advanced-panel.open { display: block; }
+    .advanced-panel label { display: block; font-size: 11px; color: #a1a1aa; margin-bottom: 4px; margin-top: 8px; }
+    .advanced-panel label:first-child { margin-top: 0; }
+    .advanced-panel textarea, .advanced-panel input[type="date"] { width: 100%; box-sizing: border-box; background: #27272a; border: 1px solid #3f3f46; color: #fff; border-radius: 4px; padding: 6px; font-size: 11px; font-family: monospace; }
+    .advanced-panel textarea { height: 60px; resize: vertical; }
+    .btn-secondary { background: #3f3f46; color: #fff; font-size: 12px; padding: 8px; margin-top: 6px; }
+    .btn-secondary:hover { background: #52525b; }
+    .btn-danger { background: #7f1d1d; color: #fff; font-size: 11px; padding: 6px; }
+    .btn-danger:hover { background: #991b1b; }
+    #checkpointInfo { font-size: 11px; color: #71717a; text-align: center; margin-top: 8px; line-height: 1.4; }
+    .footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid #27272a; text-align: center; }
+    .support-links { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
     .support-link { color: #a1a1aa; text-decoration: none; font-size: 11px; transition: color 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 5px;}
     .support-link:hover { color: #2dd4bf; }
-    .brand { font-size: 10px; color: #52525b; margin-top: 5px; }
+    .brand { font-size: 10px; color: #52525b; margin-top: 4px; }
+    .dev-badge { font-size: 10px; color: #f97316; text-align: center; margin-bottom: 8px; }
   </style>
 </head>
 <body>
   <h3>Wikmaz - Perplexity Ultimate Export</h3>
+  <div class="dev-badge">Dev build — incremental & single export</div>
   <p>Full automation for RAG pipelines.</p>
-  
+
   <div id="status">Ready to work</div>
   <progress id="progressBar" value="0" max="100"></progress>
-  
-  <button id="startBtn">Start Export</button>
+
+  <button id="exportCurrentBtn">Export current conversation</button>
+  <button id="startBtn">Start Export (full)</button>
+  <button id="incrementalBtn">Incremental export</button>
+  <button id="advancedToggle" class="advanced-toggle">Advanced options</button>
+
+  <div id="advancedPanel" class="advanced-panel">
+    <label for="selectedIds">Conversation IDs (one per line)</label>
+    <textarea id="selectedIds" placeholder="uuid or slug"></textarea>
+    <button id="exportSelectedBtn" class="btn-secondary">Export selected</button>
+
+    <label for="sinceDate">Incremental from date</label>
+    <input type="date" id="sinceDate">
+    <button id="incrementalFromDateBtn" class="btn-secondary">Incremental from date</button>
+
+    <button id="seedCheckpointBtn" class="btn-secondary">Mark current archive as synced</button>
+    <div id="checkpointInfo">Checkpoint: not initialized</div>
+    <button id="resetCheckpointBtn" class="btn-danger">Reset checkpoint</button>
+  </div>
+
   <button id="stopBtn">Stop Process</button>
-  
+
   <div class="footer">
     <div class="support-links">
-      <a href="https://ko-fi.com/wikmaz" target="_blank" class="support-link">
+      <a href="https://ko-fi.com/wikmaz" target="_blank" rel="noopener noreferrer" class="support-link">
         ☕ Support via Ko-fi (Global)
       </a>
-      <a href="https://suppi.pl/wikmaz" target="_blank" class="support-link">
+      <a href="https://suppi.pl/wikmaz" target="_blank" rel="noopener noreferrer" class="support-link">
         ❤️ Support via Suppi (Poland)
       </a>
     </div>
     <div class="brand">Created by Wikmaz</div>
   </div>
-  
+
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Wikmaz - Perplexity Ultimate Export",
-  "version": "1.0.0",
-  "description": "Bulk, free export of all your Perplexity chats to Markdown. Optimized for RAG pipelines and local LLMs.",
+  "name": "Wikmaz - Perplexity Ultimate Export (Dev)",
+  "version": "1.1.0-dev",
+  "description": "Bulk, free export of all your Perplexity chats to Markdown. Dev build with single and incremental export.",
   "homepage_url": "https://wikmaz.pl",
-  "permissions": ["activeTab", "scripting", "downloads", "tabs"],
+  "permissions": ["activeTab", "scripting", "downloads", "storage", "contextMenus"],
   "host_permissions": ["*://*.perplexity.ai/*"],
   "icons": {
     "16": "icon16.png",
