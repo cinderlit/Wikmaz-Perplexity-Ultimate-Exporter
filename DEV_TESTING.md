@@ -65,16 +65,53 @@ Chrome: `chrome://extensions` → Developer mode → Load unpacked → select th
 
 ---
 
-## G. Downloads sync + incremental (primary workflow)
+## G. Downloads sync + incremental (supplemental)
 
 1. Advanced → confirm export path is `perplexity-mining/Perplexity_Export` (or your archive path under Downloads).
-2. Click **Sync checkpoint from Downloads** (no Perplexity tab required). This reads Chrome download history for `.md` files under that path.
-3. Verify status shows file count ≈ your on-disk archive (not API thread count).
-4. Verify manifest `runType: "archive-seed"` and checkpoint count matches indexed files.
-5. Open Perplexity → **Incremental export**.
-6. Verify exports = API threads missing from archive + any threads updated since archive baseline.
+2. Click **Sync checkpoint from Downloads (merge)** (no Perplexity tab required).
+3. Verify status shows merge summary (`checkpoint N → M threads`). Downloads sync may index far fewer files than your on-disk archive in Brave.
+4. Open Perplexity → **Incremental export**.
+5. Verify exports = API threads missing from checkpoint + any threads updated since checkpoint baseline.
 
-**Note:** Only files Chrome downloaded into that folder appear in the scan. Manually copied files are not indexed unless they went through Chrome's download manager.
+**Note:** Prefer section H for a full archive seed. Downloads sync merges in what it can find from browser history.
+
+---
+
+## H. Disk checkpoint seed + JSON import (primary seed workflow)
+
+### H1. Offline script (privacy-first)
+
+```bash
+cd ~/Downloads/perplexity-mining
+node scripts/build-checkpoint-from-disk.js \
+  --root ~/Downloads/perplexity-mining/Perplexity_Export \
+  --out ~/Downloads/perplexity-checkpoint.json
+```
+
+1. Advanced → **Import checkpoint JSON** → choose the generated file (or paste JSON).
+2. Click **Merge imported checkpoint**.
+3. Verify checkpoint count ≈ your on-disk UUID file count (~2,257).
+4. Checkpoint line should show `seeded`.
+
+### H2. In-browser disk folder pick
+
+1. Advanced → **Seed checkpoint from disk folder…**
+2. In the tab, click **Choose archive folder…** and select `Perplexity_Export`.
+3. Verify success message with merged thread count.
+4. Close tab → popup checkpoint count updated.
+
+---
+
+## I. Fast incremental (early-stop pagination)
+
+1. After a complete checkpoint seed (section H), open Perplexity.
+2. Click **Incremental export**.
+3. Status should show `Checked N recent thread(s)...` with N ≈ 50–150 (not 2,258).
+4. Only new/changed threads export.
+5. Enable **Deep scan** in Advanced to force full API pagination (use after incomplete seed).
+6. **Export since date** also stops early once a page is entirely before the cutoff date.
+
+**Caveat:** List API timestamps can be stale. Use **Export since date** or **Deep scan** if an old edited thread is missed.
 
 ---
 
@@ -94,7 +131,7 @@ node --test extension-dev/tests/*.test.js
 | 1 | `thread_metadata.updated_at` | Thread detail GET |
 | 2 | Max `entry_updated_datetime` | Thread detail entries |
 | 3 | `last_query_datetime` | Thread list API |
-| 4 | Download `endTime` | Downloads archive scan (checkpoint seed) |
+| 4 | Download `endTime` / file `mtime` | Downloads archive scan or disk seed |
 | 5 | `inserted_at` / `created_at` | Thread list API |
 
 ---
@@ -103,3 +140,9 @@ node --test extension-dev/tests/*.test.js
 
 - ZIP bundling for incremental runs
 - Resume interrupted batch from checkpoint
+
+## Overwrite on re-export
+
+1. Advanced → enable **Overwrite existing files on export**.
+2. **Start Export (full)** replaces same-path `.md` files instead of creating `(1)` duplicates.
+3. Use only for emergency checkpoint rebuild when disk seed is unavailable.

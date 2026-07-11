@@ -11,6 +11,12 @@ const exportSelectedBtn = document.getElementById("exportSelectedBtn");
 const sinceDateEl = document.getElementById("sinceDate");
 const incrementalFromDateBtn = document.getElementById("incrementalFromDateBtn");
 const seedCheckpointBtn = document.getElementById("seedCheckpointBtn");
+const seedFromDiskBtn = document.getElementById("seedFromDiskBtn");
+const checkpointImportFile = document.getElementById("checkpointImportFile");
+const checkpointImportText = document.getElementById("checkpointImportText");
+const importCheckpointBtn = document.getElementById("importCheckpointBtn");
+const overwriteOnExportEl = document.getElementById("overwriteOnExport");
+const deepScanIncrementalEl = document.getElementById("deepScanIncremental");
 const resetCheckpointBtn = document.getElementById("resetCheckpointBtn");
 const checkpointInfoEl = document.getElementById("checkpointInfo");
 const archiveInfoEl = document.getElementById("archiveInfo");
@@ -22,7 +28,9 @@ const actionButtons = [
   incrementalBtn,
   exportSelectedBtn,
   incrementalFromDateBtn,
-  seedCheckpointBtn
+  seedCheckpointBtn,
+  seedFromDiskBtn,
+  importCheckpointBtn
 ];
 
 function sendAction(message, onDone) {
@@ -62,8 +70,16 @@ function loadCheckpointInfo() {
     }
     if (response.lastSuccessfulExportAt) {
       const when = new Date(response.lastSuccessfulExportAt).toLocaleString();
+      const seeded = response.seededFromArchive ? " · seeded" : "";
       checkpointInfoEl.innerText =
-        "Last sync: " + when + " (" + response.count + " threads, mode: " + (response.lastExportMode || "?") + ")";
+        "Last sync: " +
+        when +
+        " (" +
+        response.count +
+        " threads, mode: " +
+        (response.lastExportMode || "?") +
+        ")" +
+        seeded;
     } else {
       checkpointInfoEl.innerText = "Checkpoint: not initialized";
     }
@@ -83,23 +99,39 @@ function loadArchiveInfo() {
       archiveInfoEl.innerText = "Archive path: " + response.exportRoot + scanned;
       return;
     }
+    if (response.fileCount === 0 && response.downloadRecordsQueried != null) {
+      archiveInfoEl.innerText =
+        "Archive: " +
+        response.exportRoot +
+        " (0 indexed from " +
+        response.downloadRecordsQueried +
+        " download records" +
+        (response.searchCounts && response.searchCounts.allDownloads
+          ? "; allDownloads=" + response.searchCounts.allDownloads
+          : "") +
+        ")" +
+        scanned;
+      return;
+    }
     archiveInfoEl.innerText =
       "Archive: " +
       response.exportRoot +
       " (" +
       response.fileCount +
       " files" +
-      (response.skippedNoUuid ? ", " + response.skippedNoUuid + " skipped" : "") +
+      (response.indexedFromDeleted ? ", " + response.indexedFromDeleted + " deleted entries" : "") +
+      (response.indexedFromBasename ? ", " + response.indexedFromBasename + " by filename" : "") +
       ")" +
       scanned;
   });
 }
 
-function loadExportRoot() {
-  chrome.runtime.sendMessage({ action: "get_export_root" }, (response) => {
-    if (response && response.exportRoot) {
-      exportRootEl.value = response.exportRoot;
-    }
+function loadExportSettings() {
+  chrome.runtime.sendMessage({ action: "get_export_settings" }, (response) => {
+    if (chrome.runtime.lastError || !response) return;
+    if (response.exportRoot) exportRootEl.value = response.exportRoot;
+    if (overwriteOnExportEl) overwriteOnExportEl.checked = Boolean(response.overwriteOnExport);
+    if (deepScanIncrementalEl) deepScanIncrementalEl.checked = Boolean(response.deepScanIncremental);
   });
 }
 
@@ -130,7 +162,7 @@ advancedToggle.addEventListener("click", () => {
   if (advancedPanel.classList.contains("open")) {
     loadCheckpointInfo();
     loadArchiveInfo();
-    loadExportRoot();
+    loadExportSettings();
   }
 });
 
@@ -165,7 +197,7 @@ startBtn.addEventListener("click", async () => {
 incrementalBtn.addEventListener("click", async () => {
   const tab = await requirePerplexityTab();
   if (!tab) return;
-  beginRun("Scanning for changes since last export...");
+  beginRun("Checking recent threads for changes...");
   sendAction({ action: "export_incremental", tabId: tab.id });
 });
 
@@ -191,9 +223,11 @@ incrementalFromDateBtn.addEventListener("click", async () => {
     statusEl.innerText = "Error: Pick a date first.";
     return;
   }
-  const sinceDate = new Date(sinceDateEl.value).toISOString();
-  beginRun("Incremental export from " + sinceDateEl.value + "...");
-  sendAction({ action: "export_incremental", tabId: tab.id, sinceDate });
+  const sinceDate = sinceDateEl.value;
+  const parts = sinceDate.split("-").map(Number);
+  const sinceIso = new Date(parts[0], parts[1] - 1, parts[2]).toISOString();
+  beginRun("Exporting threads since " + sinceDate + "...");
+  sendAction({ action: "export_incremental", tabId: tab.id, sinceDate: sinceIso });
 });
 
 seedCheckpointBtn.addEventListener("click", () => {
@@ -205,6 +239,82 @@ seedCheckpointBtn.addEventListener("click", () => {
     }
   });
 });
+
+seedFromDiskBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("seed-from-disk.html") });
+});
+
+function readCheckpointImportPayload() {
+  const text = (checkpointImportText && checkpointImportText.value.trim()) || "";
+  if (text) {
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error("Invalid JSON in textarea");
+    }
+  }
+  return null;
+}
+
+importCheckpointBtn.addEventListener("click", () => {
+  const runImport = (checkpoint) => {
+    beginRun("Merging imported checkpoint...");
+    sendAction({ action: "import_checkpoint", checkpoint }, (err, response) => {
+      if (err) return;
+      const msg =
+        "Imported: " +
+        (response.newCount || "?") +
+        " threads" +
+        (response.stats && response.stats.added ? " · added " + response.stats.added : "") +
+        (response.stats && response.stats.updated ? " · updated " + response.stats.updated : "");
+      statusEl.innerText = msg;
+      setRunningUI(false);
+      loadCheckpointInfo();
+    });
+  };
+
+  try {
+    const fromText = readCheckpointImportPayload();
+    if (fromText) {
+      runImport(fromText);
+      return;
+    }
+    const file = checkpointImportFile && checkpointImportFile.files && checkpointImportFile.files[0];
+    if (!file) {
+      statusEl.innerText = "Error: Choose a JSON file or paste checkpoint JSON.";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        runImport(JSON.parse(String(reader.result || "")));
+      } catch (e) {
+        statusEl.innerText = "Error: Invalid checkpoint JSON file.";
+      }
+    };
+    reader.readAsText(file);
+  } catch (e) {
+    statusEl.innerText = "Error: " + e.message;
+  }
+});
+
+if (overwriteOnExportEl) {
+  overwriteOnExportEl.addEventListener("change", () => {
+    chrome.runtime.sendMessage({
+      action: "set_overwrite_on_export",
+      enabled: overwriteOnExportEl.checked
+    });
+  });
+}
+
+if (deepScanIncrementalEl) {
+  deepScanIncrementalEl.addEventListener("change", () => {
+    chrome.runtime.sendMessage({
+      action: "set_deep_scan_incremental",
+      enabled: deepScanIncrementalEl.checked
+    });
+  });
+}
 
 resetCheckpointBtn.addEventListener("click", () => {
   if (!confirm("Reset export checkpoint? Next incremental will treat all threads as new.")) return;
@@ -235,7 +345,7 @@ chrome.runtime.sendMessage({ action: "get_status" }, (response) => {
 
 loadCheckpointInfo();
 loadArchiveInfo();
-loadExportRoot();
+loadExportSettings();
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === "update_status") {

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Seed checkpoint from disk</title>
+  <style>
+    body {
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      margin: 0;
+      padding: 24px;
+      max-width: 520px;
+      background: #121212;
+      color: #ffffff;
+    }
+    h1 { margin: 0 0 8px; font-size: 18px; color: #2dd4bf; }
+    p { margin: 0 0 16px; font-size: 13px; color: #a1a1aa; line-height: 1.5; }
+    button {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      background: #2563eb;
+      color: #fff;
+      font-weight: bold;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #3f3f46; cursor: not-allowed; }
+    #status {
+      min-height: 48px;
+      font-size: 13px;
+      color: #facc15;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+    .hint { font-size: 11px; color: #71717a; margin-top: 16px; }
+    input[type="file"] { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Seed checkpoint from disk</h1>
+  <p>
+    Pick your <strong>Perplexity_Export</strong> folder. The extension reads filenames and
+    modification times only — not file contents.
+  </p>
+  <button id="pickBtn">Choose archive folder…</button>
+  <input type="file" id="folderInput" webkitdirectory multiple>
+  <div id="status">Ready.</div>
+  <p class="hint">
+    Prefer offline import? Run <code>node scripts/build-checkpoint-from-disk.js</code> and use
+    Import checkpoint JSON in the extension popup.
+  </p>
+  <script src="lib/archive-index.js"></script>
+  <script src="seed-from-disk.js"></script>
+</body>
+</html>

@@ -125,6 +125,17 @@ describe("filterIncrementalCandidates", () => {
     assert.equal(skipped, 2);
   });
 
+  it("exports by since date without checkpoint", () => {
+    const { toExport, skipped } = ExportUtils.filterBySinceDate(chats, "2026-07-02T00:00:00.000Z");
+    assert.deepEqual(toExport.map((c) => c.uuid), ["bbb"]);
+    assert.equal(skipped, 2);
+  });
+
+  it("exports all dated threads when since date is very old", () => {
+    const { toExport } = ExportUtils.filterBySinceDate(chats, "2020-01-01T00:00:00.000Z");
+    assert.equal(toExport.length, 3);
+  });
+
   it("skips all unchanged on second incremental pass", () => {
     const freshCheckpoint = Checkpoint.buildCheckpointFromArchive(
       chats.map((c) => ({
@@ -150,6 +161,15 @@ describe("buildEmptyQueueMessage", () => {
     assert.match(msg, /archive: 2158 files/);
     assert.match(msg, /API: 2255 threads/);
     assert.match(msg, /skipped: 97/);
+  });
+});
+
+describe("contentToDataUrl", () => {
+  it("encodes utf-8 text as a base64 data url", () => {
+    const url = ExportUtils.contentToDataUrl("# Hello\n\nworld", "text/markdown;charset=utf-8");
+    assert.match(url, /^data:text\/markdown;charset=utf-8;base64,/);
+    const decoded = Buffer.from(url.split(",")[1], "base64").toString("utf8");
+    assert.equal(decoded, "# Hello\n\nworld");
   });
 });
 

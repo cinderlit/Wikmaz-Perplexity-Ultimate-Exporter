@@ -8,6 +8,7 @@ let currentStatusText = "Ready to work";
 let runContext = null;
 let exportedForCheckpoint = [];
 let cachedExportRoot = ExportSettings.DEFAULT_EXPORT_ROOT;
+let cachedOverwriteOnExport = false;
 
 function newRunContext(mode, filters) {
   return {
@@ -38,12 +39,13 @@ function updateStatus(text, progress, total) {
 
 function downloadBlobContent(filename, content, mimeType) {
   return new Promise((resolve) => {
-    const blob = new Blob([content], { type: mimeType || "text/plain;charset=utf-8" });
-    const blobUrl = URL.createObjectURL(blob);
-    chrome.downloads.download({ url: blobUrl, filename, saveAs: false }, () => {
-      const failed = Boolean(chrome.runtime.lastError);
-      URL.revokeObjectURL(blobUrl);
-      resolve(!failed);
+    const url = ExportUtils.contentToDataUrl(content, mimeType);
+    const options = { url, filename, saveAs: false };
+    if (cachedOverwriteOnExport) {
+      options.conflictAction = "overwrite";
+    }
+    chrome.downloads.download(options, () => {
+      resolve(!chrome.runtime.lastError);
     });
   });
 }
@@ -52,14 +54,40 @@ function downloadTextFile(filename, content, mimeType) {
   return downloadBlobContent(filename, content, mimeType || "text/plain;charset=utf-8");
 }
 
-function fetchAllThreadsInTab(tabId) {
+function fetchAllThreadsInTab(tabId, fetchOptions) {
   return chrome.scripting.executeScript({
     target: { tabId },
-    func: fetchAllThreadsViaAPI
+    func: fetchThreadsViaAPI,
+    args: [fetchOptions || {}]
   }).then((results) => {
     if (results && results[0] && results[0].result) return results[0].result;
-    return [];
+    return { chats: [], threadsChecked: 0, pagesScanned: 0 };
   });
+}
+
+async function buildFetchOptions(mode, options) {
+  const sinceDate = options && options.sinceDate ? options.sinceDate : null;
+  const deepScan = await ExportSettings.loadDeepScanIncremental();
+  let fetchMode = "full";
+
+  if (mode === "incremental") {
+    fetchMode = sinceDate ? "sinceDate" : "incremental";
+  }
+
+  const fetchOptions = {
+    mode: fetchMode,
+    sinceDate,
+    deepScan: Boolean(deepScan || (options && options.deepScan))
+  };
+
+  if (fetchMode === "incremental") {
+    const checkpoint = await Checkpoint.loadCheckpoint();
+    if (Checkpoint.isCheckpointSeeded(checkpoint)) {
+      fetchOptions.checkpoint = Checkpoint.slimCheckpointForFetch(checkpoint);
+    }
+  }
+
+  return fetchOptions;
 }
 
 function assertPerplexityTab(tabId) {
@@ -88,21 +116,46 @@ function beginExportRun(tabId, mode, options) {
   linksQueue = [];
   currentIndex = 0;
   updateStatus("Connecting to Perplexity API...", 0, 0);
-  return ExportSettings.loadExportRoot().then((root) => {
-    cachedExportRoot = root;
-    return fetchAllThreadsInTab(tabId).then((allChats) => {
+  return Promise.all([ExportSettings.loadExportRoot(), ExportSettings.loadOverwriteOnExport()])
+    .then(([root, overwrite]) => {
+      cachedExportRoot = root;
+      cachedOverwriteOnExport = overwrite;
+      return buildFetchOptions(mode, options);
+    })
+    .then((fetchOptions) => fetchAllThreadsInTab(tabId, fetchOptions))
+    .then((fetchResult) => {
+      const allChats = fetchResult.chats || [];
       if (!allChats || allChats.length === 0) {
         throw new Error("Could not load thread list from Perplexity. Check login and try again.");
       }
       runContext.apiThreadCount = allChats.length;
+      runContext.threadsChecked = fetchResult.threadsChecked || allChats.length;
+      runContext.pagesScanned = fetchResult.pagesScanned || 0;
+      runContext.earlyStopped = Boolean(fetchResult.earlyStopped);
       return allChats;
     });
-  });
 }
 
 function resolveQueueFromList(allChats, mode, options) {
   if (mode === "incremental") {
     const sinceDate = options && options.sinceDate ? options.sinceDate : null;
+
+    if (sinceDate) {
+      const filtered = ExportUtils.filterBySinceDate(allChats, sinceDate);
+      linksQueue = filtered.toExport;
+      runContext.skipped = filtered.skipped;
+      runContext.apiThreadCount = filtered.apiTotal;
+      runContext.dateOnlyExport = true;
+      if (linksQueue.length > 0) {
+        updateStatus(
+          "Exporting " + linksQueue.length + " thread(s) since " + sinceDate.slice(0, 10) + "...",
+          0,
+          linksQueue.length
+        );
+      }
+      return Promise.resolve();
+    }
+
     return Checkpoint.loadCheckpoint().then((checkpoint) => {
       if (checkpoint.lastExportMode === "seed") {
         return Promise.reject(
@@ -113,7 +166,9 @@ function resolveQueueFromList(allChats, mode, options) {
       }
       if (!checkpoint.lastSuccessfulExportAt || Object.keys(checkpoint.conversationIndex || {}).length === 0) {
         return Promise.reject(
-          new Error("Checkpoint not initialized. Set export folder and sync checkpoint from Downloads first.")
+          new Error(
+            "Checkpoint not initialized. Import checkpoint JSON, seed from disk, or sync from Downloads first."
+          )
         );
       }
       runContext.checkpoint = checkpoint;
@@ -236,29 +291,105 @@ async function runArchiveSeed() {
   exportedForCheckpoint = [];
   linksQueue = [];
   currentIndex = 0;
-  updateStatus("Scanning Downloads export folder...", 0, 0);
+  updateStatus("Querying Chrome download history...", 0, 0);
 
   try {
     cachedExportRoot = await ExportSettings.loadExportRoot();
     const scanResult = await ArchiveIndex.scanDownloadsArchive(cachedExportRoot);
-    const checkpoint = Checkpoint.buildCheckpointFromArchive(scanResult.entries, {
+    const incoming = Checkpoint.buildCheckpointFromArchive(scanResult.entries, {
       exportRoot: cachedExportRoot,
       fileCount: scanResult.entries.length,
       skippedNoUuid: scanResult.skippedNoUuid.length,
+      indexedFromDeleted: scanResult.indexedFromDeleted,
       lastScannedAt: scanResult.meta.lastScannedAt
     });
+    const existing = await Checkpoint.loadCheckpoint();
+    const priorCount = Checkpoint.countIndex(existing);
+    const { checkpoint, stats } = Checkpoint.mergeCheckpoint(existing, incoming, { mode: "merge" });
     await Checkpoint.saveCheckpoint(checkpoint);
+    const newCount = Checkpoint.countIndex(checkpoint);
     runContext.archiveFileCount = scanResult.entries.length;
     runContext.skipped = scanResult.entries.length;
     runContext.checkpoint = checkpoint;
-    runContext.emptyQueueMessage =
-      "Archive synced: " +
+    let summary =
+      "Archive synced (merge): " +
       scanResult.entries.length +
-      " files indexed" +
-      (scanResult.skippedNoUuid.length
-        ? " (" + scanResult.skippedNoUuid.length + " without UUID skipped)"
-        : "");
+      " files indexed from " +
+      scanResult.downloadRecordsQueried +
+      " download record(s)";
+    summary += " · checkpoint " + priorCount + " → " + newCount + " threads";
+    if (newCount < priorCount) {
+      summary += " (warning: count decreased)";
+    }
+    if (stats.added > 0) summary += " · added " + stats.added;
+    if (stats.updated > 0) summary += " · updated " + stats.updated;
+    if (scanResult.indexedFromBasename > 0) {
+      summary += " (" + scanResult.indexedFromBasename + " matched by filename only)";
+    }
+    if (scanResult.indexedFromDeleted > 0) {
+      summary += " (" + scanResult.indexedFromDeleted + " from deleted download entries)";
+    }
+    if (scanResult.skippedNoUuid.length) {
+      summary += " (" + scanResult.skippedNoUuid.length + " without UUID skipped)";
+    }
+    if (scanResult.entries.length === 0) {
+      const counts = scanResult.meta.searchCounts || {};
+      summary +=
+        ". Diagnostics: merged=" +
+        (scanResult.downloadRecordsQueried || 0) +
+        ", allDownloads=" +
+        (counts.allDownloads || 0) +
+        ", uuidRegex=" +
+        (counts.uuidRegex || 0) +
+        ", mdQuery=" +
+        (counts.mdQuery || 0) +
+        ", noFilename=" +
+        (scanResult.skippedNoFilename || 0) +
+        ", rejectedPath=" +
+        (scanResult.skippedWrongPath || 0);
+      if (scanResult.meta.sampleUuidRegexFilenames && scanResult.meta.sampleUuidRegexFilenames.length) {
+        summary += ", sample=" + scanResult.meta.sampleUuidRegexFilenames[0].slice(0, 80);
+      }
+    }
+    runContext.emptyQueueMessage = summary;
+    runContext.scanDiagnostics = scanResult.meta;
     await finishRun();
+  } catch (err) {
+    handleRunError(err);
+    throw err;
+  }
+}
+
+async function runDiskCheckpointMerge(entries, meta) {
+  if (isRunning) return Promise.reject(new Error("Export already running"));
+  isRunning = true;
+  runContext = newRunContext("disk-seed", {});
+  exportedForCheckpoint = [];
+  linksQueue = [];
+  currentIndex = 0;
+
+  try {
+    const incoming = Checkpoint.buildCheckpointFromDiskEntries(entries, meta);
+    const existing = await Checkpoint.loadCheckpoint();
+    const priorCount = Checkpoint.countIndex(existing);
+    const { checkpoint, stats } = Checkpoint.mergeCheckpoint(existing, incoming, { mode: "merge" });
+    await Checkpoint.saveCheckpoint(checkpoint);
+    const newCount = Checkpoint.countIndex(checkpoint);
+    runContext.archiveFileCount = entries.length;
+    runContext.checkpoint = checkpoint;
+    runContext.emptyQueueMessage =
+      "Disk checkpoint merged: " +
+      entries.length +
+      " files indexed · checkpoint " +
+      priorCount +
+      " → " +
+      newCount +
+      " threads" +
+      (stats.added ? " · added " + stats.added : "") +
+      (stats.updated ? " · updated " + stats.updated : "") +
+      (meta && meta.skippedNoUuid ? " · " + meta.skippedNoUuid + " without UUID skipped" : "");
+    await finishRun();
+    return { priorCount, newCount, stats };
   } catch (err) {
     handleRunError(err);
     throw err;
@@ -315,6 +446,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "get_export_settings") {
+    Promise.all([
+      ExportSettings.loadExportRoot(),
+      ExportSettings.loadOverwriteOnExport(),
+      ExportSettings.loadDeepScanIncremental()
+    ]).then(([exportRoot, overwriteOnExport, deepScanIncremental]) => {
+      sendResponse({ exportRoot, overwriteOnExport, deepScanIncremental });
+    });
+    return true;
+  }
+
+  if (message.action === "set_overwrite_on_export") {
+    ExportSettings.saveOverwriteOnExport(message.enabled).then((enabled) => {
+      cachedOverwriteOnExport = enabled;
+      sendResponse({ overwriteOnExport: enabled });
+    });
+    return true;
+  }
+
+  if (message.action === "set_deep_scan_incremental") {
+    ExportSettings.saveDeepScanIncremental(message.enabled).then((enabled) => {
+      sendResponse({ deepScanIncremental: enabled });
+    });
+    return true;
+  }
+
+  if (message.action === "import_checkpoint") {
+    Checkpoint.importCheckpoint(message.checkpoint, { mode: message.replace ? "replace" : "merge" })
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.action === "merge_checkpoint_from_disk") {
+    runDiskCheckpointMerge(message.entries || [], message.meta || {})
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
   if (message.action === "reset_checkpoint") {
     Checkpoint.resetCheckpoint().then(() => sendResponse({ ok: true }));
     return true;
@@ -333,7 +504,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.action !== "get_status" &&
       message.action !== "get_checkpoint_info" &&
       message.action !== "get_export_root" &&
-      message.action !== "get_archive_info"
+      message.action !== "get_archive_info" &&
+      message.action !== "get_export_settings"
     ) {
       sendResponse && sendResponse({ error: "Export already running" });
     }
@@ -390,13 +562,16 @@ async function finishRun() {
     exportedIds: runContext.exportedIds,
     failures: runContext.failures,
     archiveFileCount: runContext.archiveFileCount ?? null,
-    apiThreadCount: runContext.apiThreadCount ?? null
+    apiThreadCount: runContext.apiThreadCount ?? null,
+    scanDiagnostics: runContext.scanDiagnostics || null
   });
 
-  const manifestFilename = ExportUtils.buildManifestFilename(runContext.runTimestamp, cachedExportRoot);
-  await downloadTextFile(manifestFilename, JSON.stringify(manifest, null, 2), "application/json");
+  if (runContext.mode !== "archive-seed" && runContext.mode !== "disk-seed") {
+    const manifestFilename = ExportUtils.buildManifestFilename(runContext.runTimestamp, cachedExportRoot);
+    await downloadTextFile(manifestFilename, JSON.stringify(manifest, null, 2), "application/json");
+  }
 
-  if (runContext.mode !== "archive-seed" && ExportUtils.shouldUpdateCheckpoint(runContext)) {
+  if (runContext.mode !== "archive-seed" && runContext.mode !== "disk-seed" && ExportUtils.shouldUpdateCheckpoint(runContext)) {
     if (exportedForCheckpoint.length > 0) {
       const checkpoint = await Checkpoint.loadCheckpoint();
       const updated = Checkpoint.updateCheckpointAfterSuccess(checkpoint, exportedForCheckpoint, runContext);
@@ -500,11 +675,68 @@ function processNextAPI() {
     });
 }
 
-async function fetchAllThreadsViaAPI() {
+async function fetchThreadsViaAPI(options) {
+  options = options || {};
+  const mode = options.mode || "full";
+  const sinceDate = options.sinceDate || null;
+  const checkpoint = options.checkpoint || null;
+  const deepScan = Boolean(options.deepScan);
+
+  function parseTimestamp(ts) {
+    if (!ts) return 0;
+    const n = Date.parse(ts);
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  function getChatUpdatedAt(chat) {
+    return (
+      chat.updatedAt ||
+      chat.last_query_datetime ||
+      chat.updated_at ||
+      chat.date ||
+      chat.inserted_at ||
+      chat.created_at ||
+      null
+    );
+  }
+
+  function shouldExportOnPage(chat) {
+    if (!checkpoint || !checkpoint.conversationIndex) return true;
+    const prev = checkpoint.conversationIndex[chat.uuid];
+    if (!prev) return true;
+    const updatedMs = parseTimestamp(getChatUpdatedAt(chat));
+    const prevMs = parseTimestamp(prev.updatedAt);
+    if (!updatedMs || !prevMs) return true;
+    return updatedMs > prevMs;
+  }
+
+  function isPageFullySynced(page) {
+    if (!page || page.length === 0) return false;
+    for (const chat of page) {
+      if (shouldExportOnPage(chat)) return false;
+    }
+    return true;
+  }
+
+  function isPageOlderThanSince(page) {
+    if (!page || page.length === 0) return true;
+    const sinceMs = parseTimestamp(sinceDate);
+    if (!sinceMs) return false;
+    for (const chat of page) {
+      if (parseTimestamp(getChatUpdatedAt(chat)) >= sinceMs) return false;
+    }
+    return true;
+  }
+
   let allChats = [];
   let offset = 0;
+  let pagesScanned = 0;
+  let earlyStopped = false;
   const limit = 50;
   const url = "https://www.perplexity.ai/rest/thread/list_ask_threads?version=2.18&source=default";
+  const canEarlyStop =
+    !deepScan &&
+    (mode === "sinceDate" || (mode === "incremental" && checkpoint && checkpoint.seededFromArchive));
 
   while (true) {
     try {
@@ -530,6 +762,7 @@ async function fetchAllThreadsViaAPI() {
 
       if (list.length === 0) break;
 
+      const pageChats = [];
       list.forEach((item) => {
         if (item.uuid) {
           let spaceName = "General";
@@ -541,7 +774,7 @@ async function fetchAllThreadsViaAPI() {
             spaceName = item.space_info.name;
           }
 
-          allChats.push({
+          pageChats.push({
             uuid: item.uuid,
             title: item.title || "Untitled",
             date: item.inserted_at || item.created_at || new Date().toISOString(),
@@ -557,16 +790,40 @@ async function fetchAllThreadsViaAPI() {
         }
       });
 
-      chrome.runtime
-        .sendMessage({ action: "update_status", text: "Scanning database... Found: " + allChats.length })
-        .catch(() => {});
+      allChats = allChats.concat(pageChats);
+      pagesScanned += 1;
+
+      const statusText =
+        canEarlyStop || mode !== "full"
+          ? "Checked " + allChats.length + " recent thread(s)..."
+          : "Scanning database... Found: " + allChats.length;
+      chrome.runtime.sendMessage({ action: "update_status", text: statusText }).catch(() => {});
+
+      if (canEarlyStop) {
+        if (mode === "incremental" && isPageFullySynced(pageChats)) {
+          earlyStopped = true;
+          break;
+        }
+        if (mode === "sinceDate" && isPageOlderThanSince(pageChats)) {
+          earlyStopped = true;
+          break;
+        }
+      }
+
+      if (list.length < limit) break;
       offset += limit;
       await new Promise((r) => setTimeout(r, 400));
     } catch (e) {
       break;
     }
   }
-  return allChats;
+
+  return {
+    chats: allChats,
+    threadsChecked: allChats.length,
+    pagesScanned,
+    earlyStopped
+  };
 }
 
 async function resolveConversationFromApi(conversationId) {

@@ -27,6 +27,9 @@
     .advanced-panel label:first-child { margin-top: 0; }
     .advanced-panel textarea, .advanced-panel input[type="date"], .advanced-panel input[type="text"] { width: 100%; box-sizing: border-box; background: #27272a; border: 1px solid #3f3f46; color: #fff; border-radius: 4px; padding: 6px; font-size: 11px; font-family: monospace; }
     .advanced-panel textarea { height: 60px; resize: vertical; }
+    .advanced-panel textarea#importCheckpointText { height: 48px; font-size: 10px; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #e4e4e7; margin-top: 10px; }
+    .checkbox-row input { width: auto; margin: 0; }
     .field-hint { font-size: 10px; color: #71717a; margin: 4px 0 0; line-height: 1.35; }
     .btn-secondary { background: #3f3f46; color: #fff; font-size: 12px; padding: 8px; margin-top: 6px; }
     .btn-secondary:hover { background: #52525b; }
@@ -64,14 +67,36 @@
     <textarea id="selectedIds" placeholder="uuid or slug"></textarea>
     <button id="exportSelectedBtn" class="btn-secondary">Export selected</button>
 
-    <label for="sinceDate">Incremental from date</label>
+    <label for="sinceDate">Export threads since date</label>
     <input type="date" id="sinceDate">
-    <button id="incrementalFromDateBtn" class="btn-secondary">Incremental from date</button>
+    <button id="incrementalFromDateBtn" class="btn-secondary">Export since date</button>
+    <p class="field-hint">Exports all API threads updated on or after this date. No archive sync required.</p>
 
     <label>Downloads archive</label>
     <div id="archiveInfo">Archive path: not loaded</div>
-    <button id="seedCheckpointBtn" class="btn-secondary">Sync checkpoint from Downloads</button>
-    <p class="field-hint">Uses Chrome download history for files under the export folder above. Re-sync after changing the path.</p>
+    <button id="seedCheckpointBtn" class="btn-secondary">Sync checkpoint from Downloads (merge)</button>
+    <p class="field-hint">Uses Chrome download history for files under the export folder above. Merges into your existing checkpoint.</p>
+
+    <label>Checkpoint from disk</label>
+    <button id="seedFromDiskBtn" class="btn-secondary">Seed checkpoint from disk folder…</button>
+    <p class="field-hint">Opens a tab to pick your Perplexity_Export folder. Reads filenames only, not file contents.</p>
+
+    <label for="checkpointImportFile">Import checkpoint JSON</label>
+    <input type="file" id="checkpointImportFile" accept=".json,application/json">
+    <textarea id="checkpointImportText" placeholder="Or paste checkpoint JSON here"></textarea>
+    <button id="importCheckpointBtn" class="btn-secondary">Merge imported checkpoint</button>
+    <p class="field-hint">JSON stays local. Build offline with scripts/build-checkpoint-from-disk.js</p>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="overwriteOnExport"> Overwrite existing files on export
+    </label>
+    <p class="field-hint">When enabled, re-exports replace same-path .md files instead of creating (1) duplicates.</p>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="deepScanIncremental"> Deep scan (check all threads on incremental)
+    </label>
+    <p class="field-hint">Disable early-stop pagination. Use after an incomplete checkpoint seed.</p>
+
     <div id="checkpointInfo">Checkpoint: not initialized</div>
     <button id="resetCheckpointBtn" class="btn-danger">Reset checkpoint</button>
   </div>
