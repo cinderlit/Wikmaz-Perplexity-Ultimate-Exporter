@@ -1,4 +1,4 @@
-importScripts("lib/export-utils.js", "lib/checkpoint.js");
+importScripts("lib/export-utils.js", "lib/checkpoint.js", "lib/settings.js");
 
 let isRunning = false;
 let linksQueue = [];
@@ -8,6 +8,7 @@ let currentStatusText = "Ready to work";
 let runContext = null;
 let exportedForCheckpoint = [];
 let seedChatList = null;
+let cachedExportRoot = ExportSettings.DEFAULT_EXPORT_ROOT;
 
 function newRunContext(mode, filters) {
   return {
@@ -80,7 +81,10 @@ function beginExportRun(tabId, mode, options) {
   linksQueue = [];
   currentIndex = 0;
   updateStatus("Connecting to Perplexity API...", 0, 0);
-  return fetchAllThreadsInTab(tabId);
+  return ExportSettings.loadExportRoot().then((root) => {
+    cachedExportRoot = root;
+    return fetchAllThreadsInTab(tabId);
+  });
 }
 
 function resolveQueueFromList(allChats, mode, options) {
@@ -226,6 +230,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "get_export_root") {
+    ExportSettings.loadExportRoot().then((root) => {
+      sendResponse({ exportRoot: root });
+    });
+    return true;
+  }
+
+  if (message.action === "set_export_root") {
+    ExportSettings.saveExportRoot(message.exportRoot).then((sanitized) => {
+      cachedExportRoot = sanitized;
+      sendResponse({ exportRoot: sanitized });
+    });
+    return true;
+  }
+
   if (message.action === "reset_checkpoint") {
     Checkpoint.resetCheckpoint().then(() => sendResponse({ ok: true }));
     return true;
@@ -240,7 +259,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (isRunning) {
-    if (message.action !== "get_status" && message.action !== "get_checkpoint_info") {
+    if (
+      message.action !== "get_status" &&
+      message.action !== "get_checkpoint_info" &&
+      message.action !== "get_export_root"
+    ) {
       sendResponse && sendResponse({ error: "Export already running" });
     }
     return;
@@ -294,7 +317,7 @@ async function finishRun() {
     failures: runContext.failures
   });
 
-  const manifestFilename = ExportUtils.buildManifestFilename(runContext.runTimestamp);
+  const manifestFilename = ExportUtils.buildManifestFilename(runContext.runTimestamp, cachedExportRoot);
   await downloadTextFile(manifestFilename, JSON.stringify(manifest, null, 2), "application/json");
 
   if (ExportUtils.shouldUpdateCheckpoint(runContext)) {
@@ -358,7 +381,7 @@ function processNextAPI() {
       if (results && results[0] && results[0].result && results[0].result.content) {
         const data = results[0].result;
         const blobUrl = "data:text/markdown;charset=utf-8," + encodeURIComponent(data.content);
-        const finalFilename = ExportUtils.buildFilename(chatData);
+        const finalFilename = ExportUtils.buildFilename(chatData, cachedExportRoot);
 
         chrome.downloads.download({ url: blobUrl, filename: finalFilename, saveAs: false }, () => {
           runContext.succeeded++;

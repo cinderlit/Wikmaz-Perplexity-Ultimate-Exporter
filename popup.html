@@ -25,8 +25,9 @@
     .advanced-panel.open { display: block; }
     .advanced-panel label { display: block; font-size: 11px; color: #a1a1aa; margin-bottom: 4px; margin-top: 8px; }
     .advanced-panel label:first-child { margin-top: 0; }
-    .advanced-panel textarea, .advanced-panel input[type="date"] { width: 100%; box-sizing: border-box; background: #27272a; border: 1px solid #3f3f46; color: #fff; border-radius: 4px; padding: 6px; font-size: 11px; font-family: monospace; }
+    .advanced-panel textarea, .advanced-panel input[type="date"], .advanced-panel input[type="text"] { width: 100%; box-sizing: border-box; background: #27272a; border: 1px solid #3f3f46; color: #fff; border-radius: 4px; padding: 6px; font-size: 11px; font-family: monospace; }
     .advanced-panel textarea { height: 60px; resize: vertical; }
+    .field-hint { font-size: 10px; color: #71717a; margin: 4px 0 0; line-height: 1.35; }
     .btn-secondary { background: #3f3f46; color: #fff; font-size: 12px; padding: 8px; margin-top: 6px; }
     .btn-secondary:hover { background: #52525b; }
     .btn-danger { background: #7f1d1d; color: #fff; font-size: 11px; padding: 6px; }
@@ -54,6 +55,10 @@
   <button id="advancedToggle" class="advanced-toggle">Advanced options</button>
 
   <div id="advancedPanel" class="advanced-panel">
+    <label for="exportRoot">Export folder (under Downloads)</label>
+    <input type="text" id="exportRoot" placeholder="perplexity-mining/Perplexity_Export">
+    <p class="field-hint">Relative to Downloads. Saved when you leave this field.</p>
+
     <label for="selectedIds">Conversation IDs (one per line)</label>
     <textarea id="selectedIds" placeholder="uuid or slug"></textarea>
     <button id="exportSelectedBtn" class="btn-secondary">Export selected</button>

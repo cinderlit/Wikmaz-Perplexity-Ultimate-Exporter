@@ -13,6 +13,7 @@ const incrementalFromDateBtn = document.getElementById("incrementalFromDateBtn")
 const seedCheckpointBtn = document.getElementById("seedCheckpointBtn");
 const resetCheckpointBtn = document.getElementById("resetCheckpointBtn");
 const checkpointInfoEl = document.getElementById("checkpointInfo");
+const exportRootEl = document.getElementById("exportRoot");
 
 const actionButtons = [
   exportCurrentBtn,
@@ -49,6 +50,22 @@ function loadCheckpointInfo() {
   });
 }
 
+function loadExportRoot() {
+  chrome.runtime.sendMessage({ action: "get_export_root" }, (response) => {
+    if (response && response.exportRoot) {
+      exportRootEl.value = response.exportRoot;
+    }
+  });
+}
+
+function saveExportRoot() {
+  chrome.runtime.sendMessage({ action: "set_export_root", exportRoot: exportRootEl.value }, (response) => {
+    if (response && response.exportRoot) {
+      exportRootEl.value = response.exportRoot;
+    }
+  });
+}
+
 async function requirePerplexityTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.url || !tab.url.includes("perplexity.ai")) {
@@ -65,8 +82,14 @@ function beginRun(statusText) {
 
 advancedToggle.addEventListener("click", () => {
   advancedPanel.classList.toggle("open");
-  if (advancedPanel.classList.contains("open")) loadCheckpointInfo();
+  if (advancedPanel.classList.contains("open")) {
+    loadCheckpointInfo();
+    loadExportRoot();
+  }
 });
+
+exportRootEl.addEventListener("change", saveExportRoot);
+exportRootEl.addEventListener("blur", saveExportRoot);
 
 exportCurrentBtn.addEventListener("click", async () => {
   const tab = await requirePerplexityTab();
@@ -160,6 +183,7 @@ chrome.runtime.sendMessage({ action: "get_status" }, (response) => {
 });
 
 loadCheckpointInfo();
+loadExportRoot();
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === "update_status") {

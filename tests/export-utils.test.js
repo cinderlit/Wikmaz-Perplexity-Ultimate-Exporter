@@ -54,6 +54,27 @@ describe("buildFilename", () => {
     assert.match(filename, / \(unknown\)\.md$/);
     assert.doesNotMatch(filename, /\.\./);
   });
+
+  it("uses custom export root prefix", () => {
+    const filename = ExportUtils.buildFilename(
+      { title: "Test", space: "Org-estra", uuid: "e9d4579c-e60c-4b59-9c58-50b1dc7ef4fd" },
+      "perplexity-mining/Perplexity_Export"
+    );
+    assert.match(filename, /^perplexity-mining\/Perplexity_Export\/Org-estra\//);
+  });
+});
+
+describe("buildManifestFilename", () => {
+  it("uses custom export root prefix", () => {
+    const filename = ExportUtils.buildManifestFilename(
+      "2026-07-10T12:00:00.000Z",
+      "perplexity-mining/Perplexity_Export"
+    );
+    assert.equal(
+      filename,
+      "perplexity-mining/Perplexity_Export/manifest-2026-07-10T12-00-00-000Z.json"
+    );
+  });
 });
 
 describe("dedupeIds", () => {
