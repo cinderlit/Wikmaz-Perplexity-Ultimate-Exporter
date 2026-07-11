@@ -10,9 +10,11 @@ const selectedIdsEl = document.getElementById("selectedIds");
 const exportSelectedBtn = document.getElementById("exportSelectedBtn");
 const sinceDateEl = document.getElementById("sinceDate");
 const incrementalFromDateBtn = document.getElementById("incrementalFromDateBtn");
+const linkArchiveBtn = document.getElementById("linkArchiveBtn");
 const seedCheckpointBtn = document.getElementById("seedCheckpointBtn");
 const resetCheckpointBtn = document.getElementById("resetCheckpointBtn");
 const checkpointInfoEl = document.getElementById("checkpointInfo");
+const archiveInfoEl = document.getElementById("archiveInfo");
 const exportRootEl = document.getElementById("exportRoot");
 
 const actionButtons = [
@@ -21,8 +23,28 @@ const actionButtons = [
   incrementalBtn,
   exportSelectedBtn,
   incrementalFromDateBtn,
+  linkArchiveBtn,
   seedCheckpointBtn
 ];
+
+function sendAction(message, onDone) {
+  chrome.runtime.sendMessage(message, (response) => {
+    const err = chrome.runtime.lastError;
+    if (err) {
+      statusEl.innerText = "Error: " + err.message;
+      setRunningUI(false);
+      if (onDone) onDone(err);
+      return;
+    }
+    if (response && response.error) {
+      statusEl.innerText = "Error: " + response.error;
+      setRunningUI(false);
+      if (onDone) onDone(new Error(response.error));
+      return;
+    }
+    if (onDone) onDone(null, response);
+  });
+}
 
 function setRunningUI(running) {
   actionButtons.forEach((btn) => {
@@ -36,7 +58,7 @@ function setRunningUI(running) {
 
 function loadCheckpointInfo() {
   chrome.runtime.sendMessage({ action: "get_checkpoint_info" }, (response) => {
-    if (!response) {
+    if (chrome.runtime.lastError || !response) {
       checkpointInfoEl.innerText = "Checkpoint: not initialized";
       return;
     }
@@ -47,6 +69,27 @@ function loadCheckpointInfo() {
     } else {
       checkpointInfoEl.innerText = "Checkpoint: not initialized";
     }
+  });
+}
+
+function loadArchiveInfo() {
+  chrome.runtime.sendMessage({ action: "get_archive_info" }, (response) => {
+    if (chrome.runtime.lastError || !response || !response.linked) {
+      archiveInfoEl.innerText = "Archive: not linked";
+      return;
+    }
+    const scanned = response.lastScannedAt
+      ? " · scanned " + new Date(response.lastScannedAt).toLocaleString()
+      : "";
+    archiveInfoEl.innerText =
+      "Archive: " +
+      response.name +
+      " (" +
+      response.fileCount +
+      " files" +
+      (response.skippedNoUuid ? ", " + response.skippedNoUuid + " skipped" : "") +
+      ")" +
+      scanned;
   });
 }
 
@@ -84,12 +127,37 @@ advancedToggle.addEventListener("click", () => {
   advancedPanel.classList.toggle("open");
   if (advancedPanel.classList.contains("open")) {
     loadCheckpointInfo();
+    loadArchiveInfo();
     loadExportRoot();
   }
 });
 
 exportRootEl.addEventListener("change", saveExportRoot);
 exportRootEl.addEventListener("blur", saveExportRoot);
+
+linkArchiveBtn.addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    statusEl.innerText = "Error: Folder picker not supported in this browser.";
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "read" });
+    await ArchiveIndex.saveDirectoryHandle(handle);
+    const scan = await ArchiveIndex.scanDirectoryHandle(handle);
+    await ArchiveIndex.saveDirectoryHandle(handle, {
+      fileCount: scan.entries.length,
+      skippedNoUuid: scan.skippedNoUuid.length,
+      lastScannedAt: new Date().toISOString()
+    });
+    statusEl.innerText =
+      "Linked " + handle.name + " (" + scan.entries.length + " .md files found)";
+    loadArchiveInfo();
+  } catch (err) {
+    if (err && err.name !== "AbortError") {
+      statusEl.innerText = "Error: " + err.message;
+    }
+  }
+});
 
 exportCurrentBtn.addEventListener("click", async () => {
   const tab = await requirePerplexityTab();
@@ -102,7 +170,7 @@ exportCurrentBtn.addEventListener("click", async () => {
   }
 
   beginRun("Exporting current conversation...");
-  chrome.runtime.sendMessage({
+  sendAction({
     action: "export_current",
     tabId: tab.id,
     tabUrl: tab.url
@@ -113,14 +181,14 @@ startBtn.addEventListener("click", async () => {
   const tab = await requirePerplexityTab();
   if (!tab) return;
   beginRun("Initializing full export...");
-  chrome.runtime.sendMessage({ action: "start_batch", tabId: tab.id });
+  sendAction({ action: "start_batch", tabId: tab.id });
 });
 
 incrementalBtn.addEventListener("click", async () => {
   const tab = await requirePerplexityTab();
   if (!tab) return;
   beginRun("Scanning for changes since last export...");
-  chrome.runtime.sendMessage({ action: "export_incremental", tabId: tab.id });
+  sendAction({ action: "export_incremental", tabId: tab.id });
 });
 
 exportSelectedBtn.addEventListener("click", async () => {
@@ -135,7 +203,7 @@ exportSelectedBtn.addEventListener("click", async () => {
     return;
   }
   beginRun("Exporting " + ids.length + " selected conversation(s)...");
-  chrome.runtime.sendMessage({ action: "export_selected", tabId: tab.id, ids });
+  sendAction({ action: "export_selected", tabId: tab.id, ids });
 });
 
 incrementalFromDateBtn.addEventListener("click", async () => {
@@ -147,21 +215,26 @@ incrementalFromDateBtn.addEventListener("click", async () => {
   }
   const sinceDate = new Date(sinceDateEl.value).toISOString();
   beginRun("Incremental export from " + sinceDateEl.value + "...");
-  chrome.runtime.sendMessage({ action: "export_incremental", tabId: tab.id, sinceDate });
+  sendAction({ action: "export_incremental", tabId: tab.id, sinceDate });
 });
 
-seedCheckpointBtn.addEventListener("click", async () => {
-  const tab = await requirePerplexityTab();
-  if (!tab) return;
-  beginRun("Syncing checkpoint with current archive...");
-  chrome.runtime.sendMessage({ action: "seed_checkpoint", tabId: tab.id });
+seedCheckpointBtn.addEventListener("click", () => {
+  beginRun("Scanning linked archive folder...");
+  sendAction({ action: "seed_from_archive" }, (err) => {
+    if (!err) {
+      loadCheckpointInfo();
+      loadArchiveInfo();
+    }
+  });
 });
 
 resetCheckpointBtn.addEventListener("click", () => {
   if (!confirm("Reset export checkpoint? Next incremental will treat all threads as new.")) return;
-  chrome.runtime.sendMessage({ action: "reset_checkpoint" }, () => {
-    statusEl.innerText = "Checkpoint reset.";
-    loadCheckpointInfo();
+  sendAction({ action: "reset_checkpoint" }, (err) => {
+    if (!err) {
+      statusEl.innerText = "Checkpoint reset.";
+      loadCheckpointInfo();
+    }
   });
 });
 
@@ -183,6 +256,7 @@ chrome.runtime.sendMessage({ action: "get_status" }, (response) => {
 });
 
 loadCheckpointInfo();
+loadArchiveInfo();
 loadExportRoot();
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -198,5 +272,6 @@ chrome.runtime.onMessage.addListener((message) => {
       statusEl.innerText = message.summary.text;
     }
     loadCheckpointInfo();
+    loadArchiveInfo();
   }
 });

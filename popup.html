@@ -32,6 +32,7 @@
     .btn-secondary:hover { background: #52525b; }
     .btn-danger { background: #7f1d1d; color: #fff; font-size: 11px; padding: 6px; }
     .btn-danger:hover { background: #991b1b; }
+    #archiveInfo { font-size: 11px; color: #71717a; text-align: center; margin: 6px 0; line-height: 1.4; }
     #checkpointInfo { font-size: 11px; color: #71717a; text-align: center; margin-top: 8px; line-height: 1.4; }
     .footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid #27272a; text-align: center; }
     .support-links { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
@@ -67,7 +68,11 @@
     <input type="date" id="sinceDate">
     <button id="incrementalFromDateBtn" class="btn-secondary">Incremental from date</button>
 
-    <button id="seedCheckpointBtn" class="btn-secondary">Mark current archive as synced</button>
+    <label>Local archive</label>
+    <div id="archiveInfo">Archive: not linked</div>
+    <button id="linkArchiveBtn" class="btn-secondary">Link archive folder…</button>
+    <button id="seedCheckpointBtn" class="btn-secondary">Sync checkpoint from archive</button>
+    <p class="field-hint">Link your Perplexity_Export folder once, then sync before incremental export.</p>
     <div id="checkpointInfo">Checkpoint: not initialized</div>
     <button id="resetCheckpointBtn" class="btn-danger">Reset checkpoint</button>
   </div>
@@ -86,6 +91,7 @@
     <div class="brand">Created by Wikmaz</div>
   </div>
 
+  <script src="lib/archive-index.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

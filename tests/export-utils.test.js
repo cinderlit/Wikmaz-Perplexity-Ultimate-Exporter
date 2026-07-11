@@ -1,5 +1,6 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const ExportSettings = require("../lib/settings.js");
 const ExportUtils = require("../lib/export-utils.js");
 const Checkpoint = require("../lib/checkpoint.js");
 
@@ -125,10 +126,30 @@ describe("filterIncrementalCandidates", () => {
   });
 
   it("skips all unchanged on second incremental pass", () => {
-    const freshCheckpoint = Checkpoint.seedCheckpointFromList(chats);
+    const freshCheckpoint = Checkpoint.buildCheckpointFromArchive(
+      chats.map((c) => ({
+        uuid: c.uuid,
+        updatedAt: c.updatedAt,
+        filename: c.title + ".md"
+      })),
+      { fileCount: chats.length }
+    );
     const { toExport, skipped } = ExportUtils.filterIncrementalCandidates(chats, freshCheckpoint);
     assert.equal(toExport.length, 0);
     assert.equal(skipped, 3);
+  });
+});
+
+describe("buildEmptyQueueMessage", () => {
+  it("includes archive and API counts", () => {
+    const msg = ExportUtils.buildEmptyQueueMessage({
+      archiveFileCount: 2158,
+      apiThreadCount: 2255,
+      skipped: 97
+    });
+    assert.match(msg, /archive: 2158 files/);
+    assert.match(msg, /API: 2255 threads/);
+    assert.match(msg, /skipped: 97/);
   });
 });
 
@@ -212,5 +233,6 @@ describe("checkpoint updateAfterSuccess", () => {
     assert.ok(updated.lastSuccessfulExportAt);
     assert.equal(updated.conversationIndex.x.updatedAt, "2026-07-03T12:00:00.000Z");
     assert.equal(updated.lastExportMode, "single");
+    assert.equal(updated.conversationIndex.x.source, "export");
   });
 });

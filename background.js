@@ -1,4 +1,4 @@
-importScripts("lib/export-utils.js", "lib/checkpoint.js", "lib/settings.js");
+importScripts("lib/settings.js", "lib/export-utils.js", "lib/checkpoint.js", "lib/archive-index.js");
 
 let isRunning = false;
 let linksQueue = [];
@@ -7,7 +7,6 @@ let mainTabId = null;
 let currentStatusText = "Ready to work";
 let runContext = null;
 let exportedForCheckpoint = [];
-let seedChatList = null;
 let cachedExportRoot = ExportSettings.DEFAULT_EXPORT_ROOT;
 
 function newRunContext(mode, filters) {
@@ -37,11 +36,20 @@ function updateStatus(text, progress, total) {
   } catch (e) {}
 }
 
-function downloadTextFile(filename, content, mimeType) {
-  const blobUrl = "data:" + mimeType + ";charset=utf-8," + encodeURIComponent(content);
+function downloadBlobContent(filename, content, mimeType) {
   return new Promise((resolve) => {
-    chrome.downloads.download({ url: blobUrl, filename, saveAs: false }, () => resolve());
+    const blob = new Blob([content], { type: mimeType || "text/plain;charset=utf-8" });
+    const blobUrl = URL.createObjectURL(blob);
+    chrome.downloads.download({ url: blobUrl, filename, saveAs: false }, () => {
+      const failed = Boolean(chrome.runtime.lastError);
+      URL.revokeObjectURL(blobUrl);
+      resolve(!failed);
+    });
   });
+}
+
+function downloadTextFile(filename, content, mimeType) {
+  return downloadBlobContent(filename, content, mimeType || "text/plain;charset=utf-8");
 }
 
 function fetchAllThreadsInTab(tabId) {
@@ -77,37 +85,55 @@ function beginExportRun(tabId, mode, options) {
   mainTabId = tabId;
   runContext = newRunContext(mode, options && options.filters ? options.filters : {});
   exportedForCheckpoint = [];
-  seedChatList = null;
   linksQueue = [];
   currentIndex = 0;
   updateStatus("Connecting to Perplexity API...", 0, 0);
   return ExportSettings.loadExportRoot().then((root) => {
     cachedExportRoot = root;
-    return fetchAllThreadsInTab(tabId);
+    return fetchAllThreadsInTab(tabId).then((allChats) => {
+      if (!allChats || allChats.length === 0) {
+        throw new Error("Could not load thread list from Perplexity. Check login and try again.");
+      }
+      runContext.apiThreadCount = allChats.length;
+      return allChats;
+    });
   });
 }
 
 function resolveQueueFromList(allChats, mode, options) {
-  if (mode === "seed") {
-    seedChatList = allChats;
-    linksQueue = [];
-    runContext.skipped = allChats.length;
-    return Promise.resolve();
-  }
-
   if (mode === "incremental") {
     const sinceDate = options && options.sinceDate ? options.sinceDate : null;
     return Checkpoint.loadCheckpoint().then((checkpoint) => {
+      if (checkpoint.lastExportMode === "seed") {
+        return Promise.reject(
+          new Error(
+            "Checkpoint was seeded from API (not your archive). Reset checkpoint, link archive folder, and sync from archive."
+          )
+        );
+      }
+      if (!checkpoint.lastSuccessfulExportAt || Object.keys(checkpoint.conversationIndex || {}).length === 0) {
+        return Promise.reject(
+          new Error("Checkpoint not initialized. Link archive folder and run Sync checkpoint from archive first.")
+        );
+      }
+      runContext.checkpoint = checkpoint;
+      runContext.archiveFileCount =
+        checkpoint.archiveMeta && checkpoint.archiveMeta.fileCount != null
+          ? checkpoint.archiveMeta.fileCount
+          : Object.keys(checkpoint.conversationIndex || {}).length;
       const filtered = ExportUtils.filterIncrementalCandidates(allChats, checkpoint, sinceDate);
       linksQueue = filtered.toExport;
       runContext.skipped = filtered.skipped;
+      runContext.apiThreadCount = filtered.apiTotal;
       if (runContext.skipped > 0) {
-        updateStatus("Skipped " + runContext.skipped + " unchanged. Exporting " + linksQueue.length + "...", 0, linksQueue.length);
+        updateStatus(
+          "Skipped " + runContext.skipped + " unchanged. Exporting " + linksQueue.length + "...",
+          0,
+          linksQueue.length
+        );
       }
     });
-  }
-
-  if (mode === "selected") {
+  } else if (mode === "selected") {
     const ids = ExportUtils.dedupeIds((options && options.ids) || []);
     const { resolved, missing, invalid } = ExportUtils.findChatsByIds(allChats, ids);
     if (invalid.length > 0) {
@@ -161,15 +187,14 @@ function resolveSingleConversation(allChats, conversationId) {
 }
 
 function startRunAfterQueueReady(mode) {
-  if (mode === "seed") {
-    return finishRun();
-  }
   if (linksQueue.length === 0) {
     if (runContext.failed > 0) {
       return finishRun();
     }
     isRunning = false;
-    updateStatus("No chats to export.", 0, 0);
+    const emptyMsg = ExportUtils.buildEmptyQueueMessage(runContext);
+    updateStatus(emptyMsg, 0, 0);
+    runContext.emptyQueueMessage = emptyMsg;
     return finishRun();
   }
   currentIndex = 0;
@@ -194,13 +219,51 @@ function handleRunError(err) {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "export-current-conversation",
-    title: "Export this conversation",
-    contexts: ["page"],
-    documentUrlPatterns: ["*://*.perplexity.ai/search/*"]
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "export-current-conversation",
+      title: "Export this conversation",
+      contexts: ["page"],
+      documentUrlPatterns: ["*://*.perplexity.ai/search/*"]
+    });
   });
 });
+
+async function runArchiveSeed() {
+  if (isRunning) return Promise.reject(new Error("Export already running"));
+  isRunning = true;
+  runContext = newRunContext("archive-seed", {});
+  exportedForCheckpoint = [];
+  linksQueue = [];
+  currentIndex = 0;
+  updateStatus("Scanning linked archive folder...", 0, 0);
+
+  try {
+    cachedExportRoot = await ExportSettings.loadExportRoot();
+    const scanResult = await ArchiveIndex.scanLinkedArchive();
+    const checkpoint = Checkpoint.buildCheckpointFromArchive(scanResult.entries, {
+      name: scanResult.meta.name,
+      fileCount: scanResult.entries.length,
+      skippedNoUuid: scanResult.skippedNoUuid.length,
+      lastScannedAt: scanResult.meta.lastScannedAt
+    });
+    await Checkpoint.saveCheckpoint(checkpoint);
+    runContext.archiveFileCount = scanResult.entries.length;
+    runContext.skipped = scanResult.entries.length;
+    runContext.checkpoint = checkpoint;
+    runContext.emptyQueueMessage =
+      "Archive synced: " +
+      scanResult.entries.length +
+      " files indexed" +
+      (scanResult.skippedNoUuid.length
+        ? " (" + scanResult.skippedNoUuid.length + " without UUID skipped)"
+        : "");
+    await finishRun();
+  } catch (err) {
+    handleRunError(err);
+    throw err;
+  }
+}
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== "export-current-conversation" || !tab || !tab.id || isRunning) return;
@@ -237,6 +300,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "get_archive_info") {
+    ArchiveIndex.getArchiveInfo().then((info) => {
+      sendResponse(info);
+    });
+    return true;
+  }
+
   if (message.action === "set_export_root") {
     ExportSettings.saveExportRoot(message.exportRoot).then((sanitized) => {
       cachedExportRoot = sanitized;
@@ -262,11 +332,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (
       message.action !== "get_status" &&
       message.action !== "get_checkpoint_info" &&
-      message.action !== "get_export_root"
+      message.action !== "get_export_root" &&
+      message.action !== "get_archive_info"
     ) {
       sendResponse && sendResponse({ error: "Export already running" });
     }
     return;
+  }
+
+  if (message.action === "seed_from_archive") {
+    runArchiveSeed()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
   }
 
   if (message.action === "start_batch") {
@@ -278,11 +356,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const filters = {};
     if (message.sinceDate) filters.sinceDate = message.sinceDate;
     startExportFromTab(message.tabId, "incremental", { filters, sinceDate: message.sinceDate });
-    return;
-  }
-
-  if (message.action === "seed_checkpoint") {
-    startExportFromTab(message.tabId, "seed", {});
     return;
   }
 
@@ -309,29 +382,29 @@ async function finishRun() {
     runType: runContext.mode,
     mode: runContext.mode,
     filters: runContext.filters,
+    exportRoot: cachedExportRoot,
     attempted: runContext.attempted,
     succeeded: runContext.succeeded,
     failed: runContext.failed,
     skipped: runContext.skipped,
     exportedIds: runContext.exportedIds,
-    failures: runContext.failures
+    failures: runContext.failures,
+    archiveFileCount: runContext.archiveFileCount ?? null,
+    apiThreadCount: runContext.apiThreadCount ?? null
   });
 
   const manifestFilename = ExportUtils.buildManifestFilename(runContext.runTimestamp, cachedExportRoot);
   await downloadTextFile(manifestFilename, JSON.stringify(manifest, null, 2), "application/json");
 
-  if (ExportUtils.shouldUpdateCheckpoint(runContext)) {
-    if (runContext.mode === "seed" && seedChatList) {
-      const seeded = Checkpoint.seedCheckpointFromList(seedChatList);
-      await Checkpoint.saveCheckpoint(seeded);
-    } else if (exportedForCheckpoint.length > 0) {
+  if (runContext.mode !== "archive-seed" && ExportUtils.shouldUpdateCheckpoint(runContext)) {
+    if (exportedForCheckpoint.length > 0) {
       const checkpoint = await Checkpoint.loadCheckpoint();
       const updated = Checkpoint.updateCheckpointAfterSuccess(checkpoint, exportedForCheckpoint, runContext);
       await Checkpoint.saveCheckpoint(updated);
     }
   }
 
-  const summaryText = ExportUtils.buildSummaryText(runContext);
+  let summaryText = runContext.emptyQueueMessage || ExportUtils.buildSummaryText(runContext);
   isRunning = false;
   linksQueue = [];
   updateStatus(summaryText, runContext.succeeded, 0);
@@ -380,18 +453,27 @@ function processNextAPI() {
 
       if (results && results[0] && results[0].result && results[0].result.content) {
         const data = results[0].result;
-        const blobUrl = "data:text/markdown;charset=utf-8," + encodeURIComponent(data.content);
         const finalFilename = ExportUtils.buildFilename(chatData, cachedExportRoot);
 
-        chrome.downloads.download({ url: blobUrl, filename: finalFilename, saveAs: false }, () => {
-          runContext.succeeded++;
-          runContext.exportedIds.push(chatData.uuid);
-          exportedForCheckpoint.push({
-            uuid: chatData.uuid,
-            title: chatData.title,
-            date: chatData.date,
-            updatedAt: data.updatedAt || chatData.updatedAt || chatData.date
-          });
+        downloadBlobContent(finalFilename, data.content, "text/markdown;charset=utf-8").then((ok) => {
+          if (!isRunning) return;
+          if (ok) {
+            runContext.succeeded++;
+            runContext.exportedIds.push(chatData.uuid);
+            exportedForCheckpoint.push({
+              uuid: chatData.uuid,
+              title: chatData.title,
+              date: chatData.date,
+              updatedAt: data.updatedAt || chatData.updatedAt || chatData.date
+            });
+          } else {
+            runContext.failed++;
+            runContext.failures.push({
+              uuid: chatData.uuid,
+              title: chatData.title,
+              error: "Download failed"
+            });
+          }
           currentIndex++;
           setTimeout(processNextAPI, 1000);
         });

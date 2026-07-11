@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wikmaz - Perplexity Ultimate Export (Dev)",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Bulk, free export of all your Perplexity chats to Markdown. Dev build with single and incremental export.",
   "homepage_url": "https://wikmaz.pl",
   "permissions": ["activeTab", "scripting", "downloads", "storage", "contextMenus"],
