@@ -10,7 +10,6 @@ const selectedIdsEl = document.getElementById("selectedIds");
 const exportSelectedBtn = document.getElementById("exportSelectedBtn");
 const sinceDateEl = document.getElementById("sinceDate");
 const incrementalFromDateBtn = document.getElementById("incrementalFromDateBtn");
-const linkArchiveBtn = document.getElementById("linkArchiveBtn");
 const seedCheckpointBtn = document.getElementById("seedCheckpointBtn");
 const resetCheckpointBtn = document.getElementById("resetCheckpointBtn");
 const checkpointInfoEl = document.getElementById("checkpointInfo");
@@ -23,7 +22,6 @@ const actionButtons = [
   incrementalBtn,
   exportSelectedBtn,
   incrementalFromDateBtn,
-  linkArchiveBtn,
   seedCheckpointBtn
 ];
 
@@ -74,16 +72,20 @@ function loadCheckpointInfo() {
 
 function loadArchiveInfo() {
   chrome.runtime.sendMessage({ action: "get_archive_info" }, (response) => {
-    if (chrome.runtime.lastError || !response || !response.linked) {
-      archiveInfoEl.innerText = "Archive: not linked";
+    if (chrome.runtime.lastError || !response) {
+      archiveInfoEl.innerText = "Archive: unknown";
       return;
     }
     const scanned = response.lastScannedAt
-      ? " · scanned " + new Date(response.lastScannedAt).toLocaleString()
-      : "";
+      ? " · synced " + new Date(response.lastScannedAt).toLocaleString()
+      : " · not synced yet";
+    if (!response.synced) {
+      archiveInfoEl.innerText = "Archive path: " + response.exportRoot + scanned;
+      return;
+    }
     archiveInfoEl.innerText =
       "Archive: " +
-      response.name +
+      response.exportRoot +
       " (" +
       response.fileCount +
       " files" +
@@ -134,30 +136,6 @@ advancedToggle.addEventListener("click", () => {
 
 exportRootEl.addEventListener("change", saveExportRoot);
 exportRootEl.addEventListener("blur", saveExportRoot);
-
-linkArchiveBtn.addEventListener("click", async () => {
-  if (!window.showDirectoryPicker) {
-    statusEl.innerText = "Error: Folder picker not supported in this browser.";
-    return;
-  }
-  try {
-    const handle = await window.showDirectoryPicker({ mode: "read" });
-    await ArchiveIndex.saveDirectoryHandle(handle);
-    const scan = await ArchiveIndex.scanDirectoryHandle(handle);
-    await ArchiveIndex.saveDirectoryHandle(handle, {
-      fileCount: scan.entries.length,
-      skippedNoUuid: scan.skippedNoUuid.length,
-      lastScannedAt: new Date().toISOString()
-    });
-    statusEl.innerText =
-      "Linked " + handle.name + " (" + scan.entries.length + " .md files found)";
-    loadArchiveInfo();
-  } catch (err) {
-    if (err && err.name !== "AbortError") {
-      statusEl.innerText = "Error: " + err.message;
-    }
-  }
-});
 
 exportCurrentBtn.addEventListener("click", async () => {
   const tab = await requirePerplexityTab();
@@ -219,7 +197,7 @@ incrementalFromDateBtn.addEventListener("click", async () => {
 });
 
 seedCheckpointBtn.addEventListener("click", () => {
-  beginRun("Scanning linked archive folder...");
+  beginRun("Scanning Downloads export folder...");
   sendAction({ action: "seed_from_archive" }, (err) => {
     if (!err) {
       loadCheckpointInfo();

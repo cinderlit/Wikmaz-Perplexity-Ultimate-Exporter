@@ -107,13 +107,13 @@ function resolveQueueFromList(allChats, mode, options) {
       if (checkpoint.lastExportMode === "seed") {
         return Promise.reject(
           new Error(
-            "Checkpoint was seeded from API (not your archive). Reset checkpoint, link archive folder, and sync from archive."
+            "Checkpoint was seeded from API (not your archive). Reset checkpoint, then sync from Downloads."
           )
         );
       }
       if (!checkpoint.lastSuccessfulExportAt || Object.keys(checkpoint.conversationIndex || {}).length === 0) {
         return Promise.reject(
-          new Error("Checkpoint not initialized. Link archive folder and run Sync checkpoint from archive first.")
+          new Error("Checkpoint not initialized. Set export folder and sync checkpoint from Downloads first.")
         );
       }
       runContext.checkpoint = checkpoint;
@@ -236,13 +236,13 @@ async function runArchiveSeed() {
   exportedForCheckpoint = [];
   linksQueue = [];
   currentIndex = 0;
-  updateStatus("Scanning linked archive folder...", 0, 0);
+  updateStatus("Scanning Downloads export folder...", 0, 0);
 
   try {
     cachedExportRoot = await ExportSettings.loadExportRoot();
-    const scanResult = await ArchiveIndex.scanLinkedArchive();
+    const scanResult = await ArchiveIndex.scanDownloadsArchive(cachedExportRoot);
     const checkpoint = Checkpoint.buildCheckpointFromArchive(scanResult.entries, {
-      name: scanResult.meta.name,
+      exportRoot: cachedExportRoot,
       fileCount: scanResult.entries.length,
       skippedNoUuid: scanResult.skippedNoUuid.length,
       lastScannedAt: scanResult.meta.lastScannedAt

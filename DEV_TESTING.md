@@ -65,14 +65,16 @@ Chrome: `chrome://extensions` → Developer mode → Load unpacked → select th
 
 ---
 
-## G. Archive link + sync + incremental (primary workflow)
+## G. Downloads sync + incremental (primary workflow)
 
-1. Advanced → **Link archive folder…** → select `Perplexity_Export` (your on-disk archive).
-2. Verify status: `Archive: Perplexity_Export (N files)`.
-3. Click **Sync checkpoint from archive** (no Perplexity tab required).
-4. Verify manifest `runType: "archive-seed"` and checkpoint count ≈ on-disk `.md` count (not API thread count).
+1. Advanced → confirm export path is `perplexity-mining/Perplexity_Export` (or your archive path under Downloads).
+2. Click **Sync checkpoint from Downloads** (no Perplexity tab required). This reads Chrome download history for `.md` files under that path.
+3. Verify status shows file count ≈ your on-disk archive (not API thread count).
+4. Verify manifest `runType: "archive-seed"` and checkpoint count matches indexed files.
 5. Open Perplexity → **Incremental export**.
 6. Verify exports = API threads missing from archive + any threads updated since archive baseline.
+
+**Note:** Only files Chrome downloaded into that folder appear in the scan. Manually copied files are not indexed unless they went through Chrome's download manager.
 
 ---
 
@@ -92,7 +94,7 @@ node --test extension-dev/tests/*.test.js
 | 1 | `thread_metadata.updated_at` | Thread detail GET |
 | 2 | Max `entry_updated_datetime` | Thread detail entries |
 | 3 | `last_query_datetime` | Thread list API |
-| 4 | File `lastModified` | Archive scan (checkpoint seed) |
+| 4 | Download `endTime` | Downloads archive scan (checkpoint seed) |
 | 5 | `inserted_at` / `created_at` | Thread list API |
 
 ---
